@@ -29,6 +29,9 @@ src = root / "src"
 if str(src) not in sys.path:
     sys.path.insert(0, str(src))
 
+# Disable CrewAI telemetry to avoid signal handler threading issues
+os.environ["CREWAI_DISABLE_TELEMETRY"] = "true"
+
 # Use a writable project directory for CrewAI task-output DB (avoids "readonly database" errors)
 _crewai_storage = root / ".crewai_storage"
 _crewai_storage.mkdir(parents=True, exist_ok=True)
@@ -121,12 +124,52 @@ elif not _needs_groq:
     if _m.startswith("ollama/"):
         st.sidebar.caption("Ensure **Ollama** is running (open the app or `ollama serve`).")
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_company_info(t: str):
+    import yfinance as yf
+    import requests
+    info = {"name": "", "logo": ""}
+    if not t:
+        return info
+    try:
+        data = yf.Ticker(t).info
+        info["name"] = data.get("longName", "")
+    except Exception:
+        pass
+    
+    urls = [
+        f"https://financialmodelingprep.com/image-stock/{t}.png",
+        f"https://assets.parqet.com/logos/symbol/{t}?format=png",
+        f"https://companiesmarketcap.com/img/company-logos/64/{t}.webp"
+    ]
+    for url in urls:
+        try:
+            r = requests.head(url, timeout=2)
+            if r.status_code == 200:
+                info["logo"] = url
+                break
+        except Exception:
+            continue
+    return info
+
 ticker = st.sidebar.text_input(
     "Stock ticker",
     value="AAPL",
     placeholder="e.g. AAPL, MSFT, GOOGL",
     help="Enter a valid stock ticker symbol.",
 ).strip().upper()
+
+if ticker:
+    c_info = get_company_info(ticker)
+    if c_info["name"] or c_info["logo"]:
+        cols = st.sidebar.columns([1, 4], vertical_alignment="center")
+        with cols[0]:
+            if c_info["logo"]:
+                st.image(c_info["logo"], width="stretch")
+            else:
+                st.markdown("<h3 style='margin:0; padding:0; text-align:center;'>🏢</h3>", unsafe_allow_html=True)
+        with cols[1]:
+            st.markdown(f"**{c_info['name'] or ticker}**")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**Workflow**")
@@ -157,7 +200,7 @@ def render_workflow_steps(current: int):
 _workflow_placeholder = st.sidebar.empty()
 _workflow_placeholder.markdown(render_workflow_steps(0), unsafe_allow_html=True)
 
-run = st.sidebar.button("Run committee", use_container_width=True)
+run = st.sidebar.button("Run committee", width="stretch")
 
 if run and ticker:
     import threading
