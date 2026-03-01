@@ -13,16 +13,7 @@ root = Path(__file__).resolve().parent
 _env_file = root / ".env"
 if _env_file.exists():
     from dotenv import load_dotenv
-    load_dotenv(_env_file)
-    with open(_env_file, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if "=" not in line or line.startswith("#"):
-                continue
-            k, _, v = line.partition("=")
-            k, v = k.strip(), v.strip().strip('"').strip("'").strip("\r\n")
-            if k in ("GROQ_API_KEY", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "MODEL") and v:
-                os.environ[k] = v
+    load_dotenv(_env_file, override=True)
 
 # Ensure src is on path when running from project root
 src = root / "src"
@@ -42,14 +33,16 @@ def _writable_db_storage_path():
 _crewai_paths.db_storage_path = _writable_db_storage_path
 
 import html
+from datetime import datetime
 import streamlit as st
+import plotly.graph_objects as go
 
 def _escape_html(s: str) -> str:
     return html.escape(s).replace("\n", "<br/>") if s else ""
 
 st.set_page_config(
-    page_title="Digital Investment Office",
-    page_icon="📊",
+    page_title="Autonomous Trading & Portfolio Optimization Agent",
+    page_icon="💹",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -106,23 +99,22 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-st.markdown('<p class="main-header">📊 Digital Investment Office</p>', unsafe_allow_html=True)
+st.markdown('<p class="main-header">💹 Autonomous Trading & Portfolio Optimization Agent</p>', unsafe_allow_html=True)
 st.markdown(
-    '<p class="sub-header">Autonomous Trading & Portfolio Optimization Agent — Multi-Agent Investment Committee</p>',
+    '<p class="sub-header">Multi-Agent Investment Committee</p>',
     unsafe_allow_html=True,
 )
 
-_model = (os.environ.get("MODEL") or "groq/llama-3.1-70b-versatile").lower()
-_needs_groq = _model.startswith("groq/")
-if _needs_groq and not os.environ.get("GROQ_API_KEY"):
+_model = (os.environ.get("MODEL") or "groq/llama-3.1-70b-versatile").strip()
+_api_key = (os.environ.get("API_KEY") or "").strip()
+_is_local = _model.lower().startswith("ollama/")
+if not _api_key and not _is_local:
     st.warning(
-        "**GROQ_API_KEY** is not set (required for current MODEL). Add it to `.env` or set [console.groq.com/keys](https://console.groq.com/keys)."
+        "**API_KEY** is not set in `.env`. Add it for your chosen provider (see `.env` comments)."
     )
-elif not _needs_groq:
-    _m = os.environ.get("MODEL", "groq/llama-3.1-70b-versatile")
-    st.sidebar.caption(f"LLM: `{_m}`" + (" (local)" if _m.startswith("ollama/") else ""))
-    if _m.startswith("ollama/"):
-        st.sidebar.caption("Ensure **Ollama** is running (open the app or `ollama serve`).")
+st.sidebar.caption(f"LLM: `{_model}`" + (" (local)" if _is_local else ""))
+if _is_local:
+    st.sidebar.caption("Ensure **Ollama** is running (open the app or `ollama serve`).")
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_company_info(t: str):
@@ -174,6 +166,184 @@ if ticker:
 st.sidebar.markdown("---")
 st.sidebar.markdown("**Workflow**")
 
+# ── Stock Dashboard (price chart + key metrics) ────────────────────
+@st.cache_data(ttl=900, show_spinner=False)
+def get_stock_dashboard_data(t: str, period: str = "6mo"):
+    """Fetch OHLCV + indicators for the dashboard chart."""
+    import yfinance as yf
+    import pandas as pd
+    try:
+        tk = yf.Ticker(t)
+        hist = tk.history(period=period, interval="1d")
+        if hist.empty:
+            return None, {}
+        df = hist.copy()
+        df["SMA_20"] = df["Close"].rolling(20).mean()
+        df["SMA_50"] = df["Close"].rolling(50).mean()
+        # Key metrics
+        latest = df["Close"].iloc[-1]
+        prev_close = df["Close"].iloc[-2] if len(df) > 1 else latest
+        day_change = latest - prev_close
+        day_change_pct = (day_change / prev_close * 100) if prev_close else 0
+        high_52w = df["Close"].max()
+        low_52w = df["Close"].min()
+        vol_latest = int(df["Volume"].iloc[-1]) if "Volume" in df.columns else 0
+        volatility = df["Close"].pct_change().rolling(20).std().iloc[-1] * (252 ** 0.5) * 100 if len(df) >= 21 else 0
+        metrics = {
+            "price": latest,
+            "change": day_change,
+            "change_pct": day_change_pct,
+            "high": high_52w,
+            "low": low_52w,
+            "volume": vol_latest,
+            "volatility": volatility,
+        }
+        return df, metrics
+    except Exception:
+        return None, {}
+
+# ── PDF Report Generator ──────────────────────────────────────────
+def generate_pdf_report(ticker_sym: str, result: dict, metrics: dict) -> bytes:
+    """Generate a professional PDF report and return as bytes."""
+    from fpdf import FPDF
+
+    class PDF(FPDF):
+        def header(self):
+            self.set_font("Helvetica", "B", 16)
+            self.set_text_color(30, 58, 95)
+            self.cell(0, 12, "Autonomous Trading & Portfolio Optimization Agent - Report", align="C", new_x="LMARGIN", new_y="NEXT")
+            self.set_draw_color(30, 58, 95)
+            self.line(10, self.get_y(), 200, self.get_y())
+            self.ln(6)
+
+        def footer(self):
+            self.set_y(-15)
+            self.set_font("Helvetica", "I", 8)
+            self.set_text_color(150, 150, 150)
+            self.cell(0, 10, f"Page {self.page_no()} | Generated {datetime.now().strftime('%Y-%m-%d %H:%M')}", align="C")
+
+    pdf = PDF()
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.add_page()
+
+    # Title
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.set_text_color(30, 58, 95)
+    pdf.cell(0, 14, f"{ticker_sym} - Investment Analysis", align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(120, 120, 120)
+    pdf.cell(0, 8, f"Report generated: {datetime.now().strftime('%B %d, %Y at %H:%M')}", align="C", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(6)
+
+    # Recommendation box
+    rec = result.get("recommendation", "HOLD")
+    if rec == "BUY":
+        pdf.set_fill_color(212, 237, 218)
+        pdf.set_text_color(21, 87, 36)
+    elif rec == "SELL":
+        pdf.set_fill_color(248, 215, 218)
+        pdf.set_text_color(114, 28, 36)
+    else:
+        pdf.set_fill_color(255, 243, 205)
+        pdf.set_text_color(133, 100, 4)
+    pdf.set_font("Helvetica", "B", 18)
+    pdf.cell(0, 14, f"  Recommendation: {rec}", fill=True, new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(4)
+
+    # Market metrics
+    pdf.set_text_color(30, 58, 95)
+    pdf.set_font("Helvetica", "B", 13)
+    pdf.cell(0, 10, "Market Overview", new_x="LMARGIN", new_y="NEXT")
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(50, 50, 50)
+    if metrics:
+        pdf.cell(95, 7, f"Price: ${metrics.get('price', 0):.2f}  |  Change: {metrics.get('change_pct', 0):+.2f}%")
+        pdf.cell(95, 7, f"Period High: ${metrics.get('high', 0):.2f}  |  Low: ${metrics.get('low', 0):.2f}", new_x="LMARGIN", new_y="NEXT")
+        pdf.cell(95, 7, f"Volatility (ann.): {metrics.get('volatility', 0):.1f}%")
+        pdf.cell(95, 7, f"Volume: {metrics.get('volume', 0):,}", new_x="LMARGIN", new_y="NEXT")
+    else:
+        pdf.cell(0, 7, "Market data not available.", new_x="LMARGIN", new_y="NEXT")
+    pdf.ln(4)
+
+    # Agent outputs
+    sections = [
+        ("Researcher - Sentiment Report", result.get("research_output", "")),
+        ("Quant - Technical Analysis", result.get("quant_output", "")),
+        ("Portfolio Manager - Decision & Justification", result.get("decision_output", "")),
+    ]
+    for title, body in sections:
+        pdf.set_text_color(30, 58, 95)
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.cell(0, 10, title, new_x="LMARGIN", new_y="NEXT")
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(50, 50, 50)
+        body_clean = (body or "(no output)").strip()
+        if len(body_clean) > 2500:
+            body_clean = body_clean[:2500] + "\n... [truncated]"
+        pdf.multi_cell(0, 5, body_clean, new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(3)
+
+    return bytes(pdf.output())
+
+if ticker:
+    with st.spinner("Loading stock data..."):
+        _period_options = {"1M": "1mo", "3M": "3mo", "6M": "6mo", "1Y": "1y", "2Y": "2y"}
+        _sel_period = st.radio("Chart period", list(_period_options.keys()), index=2, horizontal=True)
+        df_chart, metrics = get_stock_dashboard_data(ticker, _period_options[_sel_period])
+
+    if df_chart is not None and not df_chart.empty:
+        # Key metrics row
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Price", f"${metrics['price']:.2f}", f"{metrics['change']:+.2f} ({metrics['change_pct']:+.2f}%)")
+        m2.metric("Period High", f"${metrics['high']:.2f}")
+        m3.metric("Period Low", f"${metrics['low']:.2f}")
+        m4.metric("Volatility (ann.)", f"{metrics['volatility']:.1f}%")
+
+        # Candlestick chart with SMA overlays
+        fig = go.Figure()
+        fig.add_trace(go.Candlestick(
+            x=df_chart.index, open=df_chart["Open"], high=df_chart["High"],
+            low=df_chart["Low"], close=df_chart["Close"], name="Price",
+            increasing_line_color="#28a745", decreasing_line_color="#dc3545",
+        ))
+        if "SMA_20" in df_chart.columns:
+            fig.add_trace(go.Scatter(
+                x=df_chart.index, y=df_chart["SMA_20"], mode="lines",
+                name="SMA 20", line=dict(color="#0d6efd", width=1.5),
+            ))
+        if "SMA_50" in df_chart.columns:
+            fig.add_trace(go.Scatter(
+                x=df_chart.index, y=df_chart["SMA_50"], mode="lines",
+                name="SMA 50", line=dict(color="#ff8c00", width=1.5),
+            ))
+        fig.update_layout(
+            title=f"{ticker} — Price & Moving Averages",
+            yaxis_title="Price (USD)",
+            xaxis_rangeslider_visible=False,
+            template="plotly_white",
+            height=420,
+            margin=dict(l=40, r=20, t=50, b=30),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        )
+        st.plotly_chart(fig, width="stretch")
+
+        # Volume bar chart
+        vol_colors = ["#28a745" if c >= o else "#dc3545" for c, o in zip(df_chart["Close"], df_chart["Open"])]
+        fig_vol = go.Figure(go.Bar(x=df_chart.index, y=df_chart["Volume"], marker_color=vol_colors, name="Volume"))
+        fig_vol.update_layout(
+            title="Volume",
+            yaxis_title="Shares",
+            template="plotly_white",
+            height=180,
+            margin=dict(l=40, r=20, t=40, b=20),
+            showlegend=False,
+        )
+        st.plotly_chart(fig_vol, width="stretch")
+    elif ticker:
+        st.warning(f"Could not load chart data for **{ticker}**. Check the ticker symbol.")
+
+    st.markdown("---")
+
 WORKFLOW_STEPS = [
     ("1", "Researcher", "News & sentiment"),
     ("2", "Quant", "Technical analysis"),
@@ -202,18 +372,62 @@ _workflow_placeholder.markdown(render_workflow_steps(0), unsafe_allow_html=True)
 
 run = st.sidebar.button("Run committee", width="stretch")
 
+# Sidebar agent communication section — uses placeholders for live updates
+st.sidebar.markdown("---")
+st.sidebar.markdown("**Agent communication**")
+_AGENT_PANELS = [
+    ("Researcher (sentiment)", "researcher", "researcher"),
+    ("Quant (technical)", "quant", "quant"),
+    ("Portfolio Manager (decision)", "portfolio_manager", "pm"),
+]
+_comm_placeholders = [st.sidebar.empty() for _ in _AGENT_PANELS]
+
+def _render_comm_panels(outputs: dict):
+    """Update sidebar comm panels from an outputs dict (keys: researcher, quant, portfolio_manager)."""
+    for ph, (label, key, css) in zip(_comm_placeholders, _AGENT_PANELS):
+        text = (outputs.get(key) or "").strip()
+        if text:
+            if len(text) > 500:
+                text = text[:497] + "..."
+            ph.markdown(
+                f'<div class="comm-panel {css}"><div class="comm-agent">{label}</div>{_escape_html(text)}</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            ph.markdown(
+                f'<div class="comm-panel {css}" style="opacity:0.4"><div class="comm-agent">{label}</div><em>waiting...</em></div>',
+                unsafe_allow_html=True,
+            )
+
+# Show previous run results or empty panels
+if "last_crew_result" in st.session_state and not (run and ticker):
+    _prev = st.session_state["last_crew_result"]
+    _render_comm_panels({
+        "researcher": _prev.get("research_output", ""),
+        "quant": _prev.get("quant_output", ""),
+        "portfolio_manager": _prev.get("decision_output", ""),
+    })
+else:
+    for ph, (label, _key, css) in zip(_comm_placeholders, _AGENT_PANELS):
+        ph.caption("Run committee to see agent messages.")
+
 if run and ticker:
+    import json as _json
     import threading
     import time
     from trading_agent.crew import run_crew
     _progress_file = root / ".crewai_storage" / "workflow_progress.txt"
+    _outputs_file = root / ".crewai_storage" / "workflow_progress_outputs.json"
     _progress_file.parent.mkdir(parents=True, exist_ok=True)
     _result_holder = []
     _error_holder = []
 
+    # Show waiting state in comm panels
+    _render_comm_panels({})
+
     def _run():
         try:
-            _result_holder.append(run_crew(ticker, api_key=os.environ.get("GROQ_API_KEY"), progress_file=_progress_file))
+            _result_holder.append(run_crew(ticker, api_key=_api_key, progress_file=_progress_file))
         except Exception as e:
             _error_holder.append(e)
 
@@ -225,8 +439,23 @@ if run and ticker:
         except Exception:
             step = 0
         _workflow_placeholder.markdown(render_workflow_steps(step), unsafe_allow_html=True)
+        # Live-update agent comm panels from outputs file
+        try:
+            if _outputs_file.exists():
+                _live_outputs = _json.loads(_outputs_file.read_text(encoding="utf-8"))
+                _render_comm_panels(_live_outputs)
+        except Exception:
+            pass
         time.sleep(0.6)
     th.join()
+
+    # Final update of comm panels
+    try:
+        if _outputs_file.exists():
+            _live_outputs = _json.loads(_outputs_file.read_text(encoding="utf-8"))
+            _render_comm_panels(_live_outputs)
+    except Exception:
+        pass
 
     try:
         _workflow_placeholder.markdown(render_workflow_steps(4), unsafe_allow_html=True)
@@ -248,6 +477,12 @@ if run and ticker:
         raise
     result = _result_holder[0]
     st.session_state["last_crew_result"] = result
+    # Update sidebar comm panels with final data
+    _render_comm_panels({
+        "researcher": result.get("research_output", ""),
+        "quant": result.get("quant_output", ""),
+        "portfolio_manager": result.get("decision_output", ""),
+    })
     st.success("Committee run completed.")
 
     rec = result.get("recommendation", "HOLD")
@@ -274,27 +509,21 @@ if run and ticker:
     with st.expander("View full raw outputs"):
         st.json({k: v for k, v in result.items() if k != "justification" or True})
 
+    # ── PDF Report Download ────────────────────────────────────────
+    _pdf_metrics = metrics if "metrics" in dir() else {}
+    try:
+        pdf_bytes = generate_pdf_report(ticker, result, _pdf_metrics)
+        st.download_button(
+            label="📄 Download PDF Report",
+            data=pdf_bytes,
+            file_name=f"{ticker}_report_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+            mime="application/pdf",
+        )
+    except Exception as _pdf_err:
+        st.warning(f"Could not generate PDF: {_pdf_err}")
+
 elif run and not ticker:
     st.warning("Please enter a stock ticker in the sidebar.")
 
 else:
     st.info("Enter a stock ticker in the sidebar and click **Run committee** to get a Buy/Sell/Hold recommendation and full explainability.")
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("**Agent communication**")
-if "last_crew_result" in st.session_state:
-    r = st.session_state["last_crew_result"]
-    for label, key, css in [
-        ("Researcher (sentiment)", "research_output", "researcher"),
-        ("Quant (technical)", "quant_output", "quant"),
-        ("Portfolio Manager (decision)", "decision_output", "pm"),
-    ]:
-        text = (r.get(key) or "").strip() or "(no output)"
-        if len(text) > 500:
-            text = text[:497] + "..."
-        st.sidebar.markdown(
-            f'<div class="comm-panel {css}"><div class="comm-agent">{label}</div>{_escape_html(text)}</div>',
-            unsafe_allow_html=True,
-        )
-else:
-    st.sidebar.caption("Run committee to see agent messages.")

@@ -21,11 +21,13 @@ from trading_agent.crew import run_crew
 def main():
     ticker = (sys.argv[1] if len(sys.argv) > 1 else "AAPL").strip().upper()
     model = (os.environ.get("MODEL") or "groq/llama-3.1-70b-versatile").strip()
-    if model.startswith("groq/") and not os.environ.get("GROQ_API_KEY"):
-        print("Error: GROQ_API_KEY not set. For Ollama use MODEL=ollama/llama3.2 in .env (no key).", file=sys.stderr)
+    api_key = (os.environ.get("API_KEY") or "").strip()
+    is_local = model.lower().startswith("ollama/")
+    if not api_key and not is_local:
+        print("Error: API_KEY not set in .env. For Ollama use MODEL=ollama/llama3.2 (no key needed).", file=sys.stderr)
         sys.exit(1)
     print(f"Running committee for {ticker} (model: {model})...")
-    result = run_crew(ticker, api_key=os.environ.get("GROQ_API_KEY"))
+    result = run_crew(ticker, api_key=api_key)
     print("\n--- Recommendation ---")
     print(result["recommendation"])
     print("\n--- Justification ---")

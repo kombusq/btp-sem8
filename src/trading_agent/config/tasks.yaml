@@ -24,8 +24,6 @@ quant_task:
     summary (e.g. above/below SMAs, volatility), (3) Technical entry/exit
     considerations. No Buy/Sell recommendation yet.
   agent: quant
-  context:
-    - research_task
 
 decision_task:
   description: >
