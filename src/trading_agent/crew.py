@@ -150,7 +150,8 @@ def run_crew(ticker: str, api_key: str | None = None, progress_file: str | Path 
     inputs = {"ticker": ticker.strip().upper()}
     progress_path = Path(progress_file) if progress_file else None
     outputs_path = progress_path.with_name(progress_path.stem + "_outputs.json") if progress_path else None
-    task_step = [0]  # mutable so handler can increment
+    task_step = [0]  # mutable — incremented by _on_task_started for progress UI
+    completed_step = [0]  # separate counter — incremented by _on_task_completed for output mapping
     _task_names = ["researcher", "quant", "portfolio_manager"]  # order matches sequential pipeline
 
     def _on_task_started(_source: Any, event: Any) -> None:
@@ -173,6 +174,10 @@ def run_crew(ticker: str, api_key: str | None = None, progress_file: str | Path 
                 output_text = output_text.raw
             else:
                 output_text = str(output_text)
+            # Use completion counter (not start counter) so outputs always map correctly
+            step_idx = completed_step[0]
+            completed_step[0] += 1
+            agent_key = _task_names[step_idx] if step_idx < len(_task_names) else f"task_{step_idx}"
             # Read existing, append, write back
             existing = {}
             if outputs_path.exists():
@@ -180,8 +185,6 @@ def run_crew(ticker: str, api_key: str | None = None, progress_file: str | Path 
                     existing = _json.loads(outputs_path.read_text(encoding="utf-8"))
                 except Exception:
                     existing = {}
-            step_idx = task_step[0] - 1  # 0-based (task_step already incremented for the *next* task or stayed)
-            agent_key = _task_names[step_idx] if step_idx < len(_task_names) else f"task_{step_idx}"
             existing[agent_key] = output_text
             outputs_path.write_text(_json.dumps(existing, ensure_ascii=False), encoding="utf-8")
         except Exception:
@@ -227,17 +230,17 @@ def run_crew(ticker: str, api_key: str | None = None, progress_file: str | Path 
     # Parse final recommendation from decision_output
     import re as _re
     rec = "HOLD"
-    _dec_upper = (decision_output or "").upper()
-    # 1) Look for explicit "Recommendation: BUY/SELL/HOLD" pattern first
-    _rec_match = _re.search(
-        r"(?:FINAL\s+)?RECOMMENDATION\s*[:\-]\s*(BUY|SELL|HOLD)", _dec_upper
+    # Strip markdown bold/italic markers before parsing
+    _dec_clean = _re.sub(r"\*+", "", (decision_output or "")).upper()
+    # Find ALL "Recommendation: BUY/SELL/HOLD" patterns and take the LAST one
+    _all_rec = _re.findall(
+        r"(?:FINAL\s+)?RECOMMENDATION\s*[:\-]\s*(BUY|SELL|HOLD)", _dec_clean
     )
-    if _rec_match:
-        rec = _rec_match.group(1)
+    if _all_rec:
+        rec = _all_rec[-1]
     else:
-        # 2) Fallback: find the LAST standalone BUY/SELL/HOLD (the PM's own conclusion,
-        #    not a reference to news like "Buy Rating on Broadcom")
-        _standalone = _re.findall(r"\b(BUY|SELL|HOLD)\b", _dec_upper)
+        # Fallback: last standalone BUY/SELL/HOLD word in the text
+        _standalone = _re.findall(r"\b(BUY|SELL|HOLD)\b", _dec_clean)
         if _standalone:
             rec = _standalone[-1]
 

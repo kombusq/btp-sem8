@@ -207,6 +207,23 @@ def generate_pdf_report(ticker_sym: str, result: dict, metrics: dict) -> bytes:
     """Generate a professional PDF report and return as bytes."""
     from fpdf import FPDF
 
+    def _sanitize(text: str) -> str:
+        """Replace Unicode characters unsupported by Helvetica with ASCII equivalents."""
+        replacements = {
+            "\u2018": "'", "\u2019": "'",   # smart single quotes
+            "\u201c": '"', "\u201d": '"',   # smart double quotes
+            "\u2013": "-", "\u2014": "--",  # en-dash, em-dash
+            "\u2026": "...",                # ellipsis
+            "\u2022": "*",                  # bullet
+            "\u00a0": " ",                  # non-breaking space
+            "\u200b": "",                   # zero-width space
+            "\u2032": "'", "\u2033": '"',   # prime, double prime
+        }
+        for uni, asc in replacements.items():
+            text = text.replace(uni, asc)
+        # Remove any remaining non-latin1 characters
+        return text.encode("latin-1", errors="replace").decode("latin-1")
+
     class PDF(FPDF):
         def header(self):
             self.set_font("Helvetica", "B", 16)
@@ -277,7 +294,7 @@ def generate_pdf_report(ticker_sym: str, result: dict, metrics: dict) -> bytes:
         pdf.cell(0, 10, title, new_x="LMARGIN", new_y="NEXT")
         pdf.set_font("Helvetica", "", 9)
         pdf.set_text_color(50, 50, 50)
-        body_clean = (body or "(no output)").strip()
+        body_clean = _sanitize((body or "(no output)").strip())
         if len(body_clean) > 2500:
             body_clean = body_clean[:2500] + "\n... [truncated]"
         pdf.multi_cell(0, 5, body_clean, new_x="LMARGIN", new_y="NEXT")
@@ -422,7 +439,12 @@ if run and ticker:
     _result_holder = []
     _error_holder = []
 
-    # Show waiting state in comm panels
+    # Clear previous outputs file and show waiting state
+    if _outputs_file.exists():
+        try:
+            _outputs_file.unlink()
+        except Exception:
+            pass
     _render_comm_panels({})
 
     def _run():
@@ -433,6 +455,7 @@ if run and ticker:
 
     th = threading.Thread(target=_run)
     th.start()
+    time.sleep(0.3)  # brief delay so crew initializes before we start polling
     while th.is_alive():
         try:
             step = int(_progress_file.read_text(encoding="utf-8").strip() or "0")
